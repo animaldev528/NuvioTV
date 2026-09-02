@@ -47,7 +47,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -277,6 +279,9 @@ open class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var deepLinkHandler: DeepLinkHandler
+
+    @Inject
+    lateinit var companionPlaybackBridge: com.nuvio.tv.core.boomio.CompanionPlaybackBridge
 
     private val pendingDeepLinkUrl = MutableStateFlow<String?>(null)
     private val pendingLaunchIntent = MutableStateFlow<Intent?>(null)
@@ -728,6 +733,39 @@ open class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    // Companion (bsc) play commands: a `play` frame from the hub
+                    // (phone remote or watch party) is routed into the player screen.
+                    LaunchedEffect(navController) {
+                        companionPlaybackBridge.pendingPlayRequest.collect { request ->
+                            if (request == null) return@collect
+                            Log.d("MainActivity", "companion play: ${request.title} ${request.imdbId ?: ""}")
+                            navController.navigate(
+                                Screen.Player.createRoute(
+                                    streamUrl = request.streamUrl,
+                                    title = request.title?.takeIf { it.isNotBlank() } ?: "Remote Playback",
+                                    contentId = request.imdbId,
+                                    contentType = if (request.season != null) "series" else "movie",
+                                    season = request.season,
+                                    episode = request.episode,
+                                    resumeFromMs = request.resumeFromMs,
+                                    startPaused = request.startPaused
+                                )
+                            )
+                            companionPlaybackBridge.consumePlayRequest()
+                        }
+                    }
+
+                    // Companion (bsc) search commands: a `stealth_search` frame from the
+                    // phone remote opens the TV's Search screen so its keyboard/speech
+                    // input can drive the search field there.
+                    LaunchedEffect(navController, currentRoute) {
+                        companionPlaybackBridge.searchRequestTick.collect { tick ->
+                            if (tick <= 0) return@collect
+                            Log.d("MainActivity", "companion search requested")
+                            navigateToDrawerRoute(navController, currentRoute, Screen.Search.route)
+                        }
+                    }
+
                     // Navigate to content when launched from the Continue Watching channel row.
                     LaunchedEffect(navController) {
                         if (launchContentId != null && launchContentType != null && layoutChosen) {
@@ -851,8 +889,10 @@ open class MainActivity : ComponentActivity() {
 
                     val rootRoutes = remember(discoverLocation) {
                         buildSet {
-                            add(Screen.Home.route)
                             add(Screen.Search.route)
+                            add(Screen.Home.route)
+                            add(Screen.Movies.route)
+                            add(Screen.Tv.route)
                             add(Screen.Library.route)
                             add(Screen.Settings.route)
                             if (discoverLocation == DiscoverLocation.IN_SIDEBAR) {
@@ -864,12 +904,16 @@ open class MainActivity : ComponentActivity() {
                     val strNavHome = stringResource(R.string.nav_home)
                     val strNavDiscover = stringResource(R.string.nav_discover)
                     val strNavSearch = stringResource(R.string.nav_search)
+                    val strNavMovies = stringResource(R.string.nav_movies)
+                    val strNavTv = stringResource(R.string.nav_tv)
                     val strNavLibrary = stringResource(R.string.nav_library)
                     val strNavSettings = stringResource(R.string.nav_settings)
                     val drawerItems = remember(
                         strNavHome,
                         strNavDiscover,
                         strNavSearch,
+                        strNavMovies,
+                        strNavTv,
                         strNavLibrary,
                         strNavSettings,
                         discoverLocation
@@ -877,9 +921,30 @@ open class MainActivity : ComponentActivity() {
                         buildList {
                             add(
                                 DrawerItem(
+                                    route = Screen.Search.route,
+                                    label = strNavSearch,
+                                    iconRes = R.raw.sidebar_search
+                                )
+                            )
+                            add(
+                                DrawerItem(
                                     route = Screen.Home.route,
                                     label = strNavHome,
                                     icon = Icons.Default.Home
+                                )
+                            )
+                            add(
+                                DrawerItem(
+                                    route = Screen.Movies.route,
+                                    label = strNavMovies,
+                                    icon = Icons.Default.Movie
+                                )
+                            )
+                            add(
+                                DrawerItem(
+                                    route = Screen.Tv.route,
+                                    label = strNavTv,
+                                    icon = Icons.Default.Tv
                                 )
                             )
                             if (discoverLocation == DiscoverLocation.IN_SIDEBAR) {
@@ -891,13 +956,6 @@ open class MainActivity : ComponentActivity() {
                                     )
                                 )
                             }
-                            add(
-                                DrawerItem(
-                                    route = Screen.Search.route,
-                                    label = strNavSearch,
-                                    iconRes = R.raw.sidebar_search
-                                )
-                            )
                             add(
                                 DrawerItem(
                                     route = Screen.Library.route,

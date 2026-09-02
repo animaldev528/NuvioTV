@@ -1,5 +1,8 @@
 package com.nuvio.tv.ui.screens.search
 
+import com.nuvio.tv.core.activity.ActivityEventReporter
+import com.nuvio.tv.core.boomio.CompanionPlaybackBridge
+
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -56,6 +59,8 @@ class SearchViewModel @Inject constructor(
     private val watchProgressRepository: com.nuvio.tv.domain.repository.WatchProgressRepository,
     private val watchedSeriesStateHolder: com.nuvio.tv.data.local.WatchedSeriesStateHolder,
     val posterOptions: com.nuvio.tv.ui.components.posteroptions.PosterOptionsController,
+    private val activityEventReporter: ActivityEventReporter,
+    val companionPlaybackBridge: CompanionPlaybackBridge,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -366,6 +371,14 @@ class SearchViewModel @Inject constructor(
     private fun submitSearch() {
         // An explicit submit just skips the remaining debounce; the live run would land anyway.
         liveSearchJob?.cancel()
+        val query = _uiState.value.query.trim()
+        activityEventReporter.report(
+            eventType = "search",
+            status = "succeeded",
+            entityType = "search",
+            entityKey = query,
+            action = "submit",
+        )
         performSearch(_uiState.value.query, rememberToHistory = true)
     }
 

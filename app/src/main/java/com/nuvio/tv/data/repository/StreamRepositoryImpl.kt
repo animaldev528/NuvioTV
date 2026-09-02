@@ -2,6 +2,7 @@ package com.nuvio.tv.data.repository
 
 import android.content.Context
 import android.util.Log
+import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.R
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.core.network.safeApiCall
@@ -38,11 +39,16 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
 import java.security.MessageDigest
 import javax.inject.Inject
 
 private const val TAG = "StreamRepositoryImpl"
+// Give the installed-addons flow time to populate before giving up and proceeding
+// with whatever it has (usually empty on a cold start — which is what surfaces as
+// "no installed addon supports streams" when the .first() race wins).
+private const val AWAIT_ADDONS_TIMEOUT_MS = 5_000L
 
 class StreamRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -131,7 +137,7 @@ class StreamRepositoryImpl @Inject constructor(
     private suspend fun captureSourceConfiguration(): StreamSourceConfigurationSnapshot {
         while (true) {
             val profileId = profileManager.activeProfileId.value
-            val addons = addonRepository.getInstalledAddons().first().enabledAddons()
+            val addons = awaitInstalledAddons()
             val pluginsEnabled = pluginManager.pluginsEnabled.first()
             val enabledScrapers = if (pluginsEnabled) pluginManager.enabledScrapers.first() else emptyList()
             val groupPluginsByRepository = pluginsEnabled && pluginManager.groupStreamsByRepository.first()
@@ -150,6 +156,19 @@ class StreamRepositoryImpl @Inject constructor(
                 debridSettings = debridSettings
             )
         }
+    }
+
+    /**
+     * The installed-addons flow is stateIn(Eagerly) seeded with an empty list, so
+     * `first()` right after a cold start can return zero addons and make the stream
+     * filter report "no installed addon supports streams". Wait (briefly) for a
+     * populated emission before giving up and proceeding with whatever is there.
+     */
+    private suspend fun awaitInstalledAddons(): List<Addon> {
+        val installedAddons = addonRepository.getInstalledAddons()
+        return withTimeoutOrNull(AWAIT_ADDONS_TIMEOUT_MS) {
+            installedAddons.first { it.isNotEmpty() }
+        }?.enabledAddons() ?: installedAddons.first().enabledAddons()
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -190,7 +209,13 @@ class StreamRepositoryImpl @Inject constructor(
                 streamAddons.forEach { addon ->
                     launch {
                         try {
-                            val streamsResult = getStreamsFromAddon(addon.baseUrl, type, videoId)
+                            val streamsResult = getStreamsFromAddon(
+                                baseUrl = addon.baseUrl,
+                                type = type,
+                                videoId = videoId,
+                                addonName = addon.displayName,
+                                addonLogo = addon.logo
+                            )
                             when (streamsResult) {
                                 is NetworkResult.Success -> {
                                     if (streamsResult.data.isNotEmpty()) {
@@ -563,7 +588,9 @@ class StreamRepositoryImpl @Inject constructor(
     override suspend fun getStreamsFromAddon(
         baseUrl: String,
         type: String,
-        videoId: String
+        videoId: String,
+        addonName: String,
+        addonLogo: String?
     ): NetworkResult<List<Stream>> {
         val cleanBaseUrl = baseUrl.trimEnd('/')
         val queryStart = cleanBaseUrl.indexOf('?')
@@ -571,32 +598,47 @@ class StreamRepositoryImpl @Inject constructor(
         val baseQuery = if (queryStart >= 0) cleanBaseUrl.substring(queryStart) else ""
         val encodedType = encodePathSegment(type)
         val encodedVideoId = encodePathSegment(videoId)
-        val streamUrl = "$basePath/stream/$encodedType/$encodedVideoId.json$baseQuery"
+        val streamUrl = buildString {
+            append(basePath)
+            append("/stream/")
+            append(encodedType)
+            append('/')
+            append(encodedVideoId)
+            append(".json")
+            append(baseQuery)
+            // Install-level capability hint: when this build was compiled with a max
+            // resolution (BOOMIO_MAX_RESOLUTION, e.g. "1080p"), ask bsf to cap the
+            // stream list so higher resolutions never reach this device's picker.
+            val boomioBase = BuildConfig.BOOMIO_BASE_URL.trim().trimEnd('/')
+            val maxResolution = BuildConfig.BOOMIO_MAX_RESOLUTION.trim()
+                .takeIf { it.isNotBlank() && basePath.startsWith(boomioBase) }
+            if (maxResolution != null) {
+                append(if (baseQuery.isEmpty()) '?' else '&')
+                append("maxResolution=")
+                append(maxResolution)
+            }
+        }
         Log.d(TAG, "Fetching streams type=$type videoId=$videoId url=$streamUrl")
 
-        // First, get addon info for name and logo
-        val addonResult = addonRepository.fetchAddon(baseUrl)
-        val addonName = when (addonResult) {
-            is NetworkResult.Success -> addonResult.data.displayName
-            else -> context.getString(com.nuvio.tv.R.string.stream_addon_unknown)
-        }
-        val addonLogo = when (addonResult) {
-            is NetworkResult.Success -> addonResult.data.logo
-            else -> null
+        // Addon name/logo come from the installed-addons manifest cache (the caller
+        // already has them), not a per-request manifest fetch. Re-fetching the manifest
+        // here both wastes a request and thrashes the addon's manifest endpoint (429).
+        val resolvedAddonName = addonName.ifBlank {
+            context.getString(com.nuvio.tv.R.string.stream_addon_unknown)
         }
 
         return when (val result = safeApiCall(context) { api.getStreams(streamUrl) }) {
             is NetworkResult.Success -> {
-                val streams = result.data.streams?.map { 
-                    it.toDomain(addonName, addonLogo) 
+                val streams = result.data.streams?.map {
+                    it.toDomain(resolvedAddonName, addonLogo)
                 } ?: emptyList()
-                Log.d(TAG, "Streams success addon=$addonName count=${streams.size} url=$streamUrl")
+                Log.d(TAG, "Streams success addon=$resolvedAddonName count=${streams.size} url=$streamUrl")
                 NetworkResult.Success(streams)
             }
             is NetworkResult.Error -> {
                 Log.w(
                     TAG,
-                    "Streams failed addon=$addonName code=${result.code} message=${result.message} url=$streamUrl"
+                    "Streams failed addon=$resolvedAddonName code=${result.code} message=${result.message} url=$streamUrl"
                 )
                 result
             }
