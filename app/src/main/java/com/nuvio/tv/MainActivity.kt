@@ -202,9 +202,14 @@ val LocalKidsMode = compositionLocalOf { false }
  * Kids-only long-press action: navigate to the More-like-this wall for a pressed
  * approved title. Null outside the sidebar scaffolds (e.g. onboarding), where the
  * action must stay hidden.
+ *
+ * [exclude] carries the tt ids of the wall the user is drilling FROM (empty on the
+ * first entry from a wall/library). A MoreLikeThisScreen overrides this local for
+ * its subtree, injecting its own current tile ids, so each deeper "More like this"
+ * hides the wall it was launched from and the results keep changing (3+ deep).
  */
 val LocalMoreLikeThisNavigator =
-    compositionLocalOf<((type: String, id: String, title: String) -> Unit)?> { null }
+    compositionLocalOf<((type: String, id: String, title: String, exclude: List<String>) -> Unit)?> { null }
 
 private const val SIDEBAR_AUTO_COLLAPSE_DELAY_MS = 4_000L
 
@@ -1594,8 +1599,8 @@ private fun LegacySidebarScaffold(
                 LocalSidebarExpanded provides (drawerState.currentValue == DrawerValue.Open),
                 LocalContentFocusRequester provides contentFocusRequester,
                 LocalKidsMode provides kidsMode,
-                LocalMoreLikeThisNavigator provides { type, id, title ->
-                    navController.navigate(Screen.MoreLikeThis.createRoute(type, id, title))
+                LocalMoreLikeThisNavigator provides { type, id, title, exclude ->
+                    navController.navigate(Screen.MoreLikeThis.createRoute(type, id, title, exclude))
                 }
             ) {
                 NuvioNavHost(
@@ -2036,8 +2041,8 @@ private fun ModernSidebarScaffold(
                 LocalSidebarExpanded provides isSidebarExpanded,
                 LocalContentFocusRequester provides contentFocusRequester,
                 LocalKidsMode provides kidsMode,
-                LocalMoreLikeThisNavigator provides { type, id, title ->
-                    navController.navigate(Screen.MoreLikeThis.createRoute(type, id, title))
+                LocalMoreLikeThisNavigator provides { type, id, title, exclude ->
+                    navController.navigate(Screen.MoreLikeThis.createRoute(type, id, title, exclude))
                 }
             ) {
                 NuvioNavHost(
