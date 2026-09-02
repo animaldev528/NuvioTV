@@ -14,6 +14,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -77,6 +78,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -242,6 +244,7 @@ private fun ModernCatalogRowItem(
     onCatalogSelectionFocused: (FocusedCatalogSelection) -> Unit,
     onNavigateToDetail: (String, String, String) -> Unit,
     onNavigateToFolderDetail: (String, String) -> Unit,
+    onNavigateToDrillDown: (DrillTarget) -> Unit = {},
     onLongPress: () -> Unit,
     onBackdropInteraction: () -> Unit,
     onExpandedCatalogFocusKeyChange: (String?) -> Unit,
@@ -251,6 +254,7 @@ private fun ModernCatalogRowItem(
     val focusKey = when (payload) {
         is ModernPayload.Catalog -> payload.focusKey
         is ModernPayload.CollectionFolder -> payload.focusKey
+        is ModernPayload.Drill -> "drill-${payload.target.drillCatalogId}"
         is ModernPayload.ContinueWatching -> error("Unsupported payload for ModernCatalogRowItem")
     }
 
@@ -313,6 +317,7 @@ private fun ModernCatalogRowItem(
                     )
                 )
             }
+            is ModernPayload.Drill -> Unit
             is ModernPayload.ContinueWatching -> Unit
         }
     }
@@ -410,6 +415,7 @@ private fun ModernCatalogRowItem(
                         payload.folderId
                     )
                 }
+                is ModernPayload.Drill -> onNavigateToDrillDown(payload.target)
                 is ModernPayload.ContinueWatching -> Unit
             }
         },
@@ -417,6 +423,31 @@ private fun ModernCatalogRowItem(
         onBackdropInteraction = onBackdropInteraction,
         onTrailerEnded = { onExpandedCatalogFocusKeyChange(null) }
     )
+}
+
+@Composable
+private fun ModernDrillTile(
+    payload: ModernPayload.Drill,
+    requester: FocusRequester,
+    isTargetItem: Boolean,
+    onFocused: () -> Unit,
+    onDrillClick: (DrillTarget) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .width(150.dp)
+            .height(225.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF222222))
+            .focusRequester(requester)
+            .focusable()
+            .onFocusChanged { if (it.isFocused) onFocused() }
+            .border(if (isTargetItem) 2.dp else 0.dp, Color.White, RoundedCornerShape(8.dp))
+            .clickable { onDrillClick(payload.target) },
+        contentAlignment = Alignment.Center
+    ) {
+        Text("More Like This ▸", color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
+    }
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -467,6 +498,7 @@ internal fun ModernRowSection(
     onCatalogSelectionFocused: (FocusedCatalogSelection) -> Unit,
     onNavigateToDetail: (String, String, String) -> Unit,
     onNavigateToFolderDetail: (String, String) -> Unit,
+    onNavigateToDrillDown: (DrillTarget) -> Unit = {},
     onLoadMoreCatalog: (String, String, String) -> Unit,
     onBackdropInteraction: () -> Unit,
     onExpandedCatalogFocusKeyChange: (String?) -> Unit,
@@ -661,6 +693,7 @@ internal fun ModernRowSection(
                         val heightPx = with(density) { metrics.height.roundToPx() }
                         url to "${url}_${widthPx}x${heightPx}"
                     }
+                    is ModernPayload.Drill -> null
                     is ModernPayload.ContinueWatching -> {
                         // Use the same model and cache key the card computes so the prefetch warms the entry the card actually reads.
                         val model = continueWatchingImageModel(
@@ -722,6 +755,7 @@ internal fun ModernRowSection(
                             )
                             with(density) { metrics.width.roundToPx() } to with(density) { metrics.height.roundToPx() }
                         }
+                        is ModernPayload.Drill -> with(density) { portraitCatalogCardWidth.roundToPx() } to with(density) { portraitCatalogCardHeight.roundToPx() }
                         is ModernPayload.ContinueWatching -> cwWidthPx to cwHeightPx
                     }
                     enqueueIfNeeded(item, wPx, hPx)
@@ -758,6 +792,7 @@ internal fun ModernRowSection(
                                     )
                                     with(density) { metrics.width.roundToPx() } to with(density) { metrics.height.roundToPx() }
                                 }
+                                is ModernPayload.Drill -> with(density) { portraitCatalogCardWidth.roundToPx() } to with(density) { portraitCatalogCardHeight.roundToPx() }
                                 is ModernPayload.ContinueWatching -> cwWidthPx to cwHeightPx
                             }
                             enqueueIfNeeded(item, wPx, hPx)
@@ -883,6 +918,7 @@ internal fun ModernRowSection(
                             is ModernPayload.ContinueWatching -> "modern_cw_card"
                             is ModernPayload.Catalog -> if (payload.itemId.startsWith("__placeholder_")) "placeholder" else payload.itemType
                             is ModernPayload.CollectionFolder -> "modern_collection_folder_card"
+                            is ModernPayload.Drill -> "modern_drill_card"
                         }
                     }
                 ) { index, item ->
@@ -946,6 +982,8 @@ internal fun ModernRowSection(
                             val expandedFocusKey = when (payload) {
                                 is ModernPayload.Catalog -> payload.focusKey
                                 is ModernPayload.CollectionFolder -> payload.focusKey
+                                is ModernPayload.Drill -> null
+                                is ModernPayload.ContinueWatching -> null
                             }
                             val isBackdropExpandedLambda = remember(
                                 effectiveExpandEnabled,
@@ -995,12 +1033,23 @@ internal fun ModernRowSection(
                                 onCatalogSelectionFocused = onCatalogSelectionFocused,
                                 onNavigateToDetail = onNavigateToDetail,
                                 onNavigateToFolderDetail = onNavigateToFolderDetail,
+                                onNavigateToDrillDown = onNavigateToDrillDown,
                                 onLongPress = onLongPress,
                                 onBackdropInteraction = onBackdropInteraction,
                                 onExpandedCatalogFocusKeyChange = onExpandedCatalogFocusKeyChange,
                                 enrichedPreviews = enrichedPreviews
                             )
                             } // Box
+                        }
+
+                        is ModernPayload.Drill -> {
+                            ModernDrillTile(
+                                payload = payload,
+                                requester = requester,
+                                isTargetItem = isTargetItem,
+                                onFocused = onFocused,
+                                onDrillClick = onNavigateToDrillDown
+                            )
                         }
                     }
                 }
