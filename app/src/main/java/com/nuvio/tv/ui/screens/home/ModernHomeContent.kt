@@ -118,6 +118,7 @@ fun ModernHomeContent(
     isCatalogItemWatched: (MetaPreview) -> Boolean = { false },
     onCatalogItemLongPress: (MetaPreview, String) -> Unit = { _, _ -> },
     onNavigateToFolderDetail: (String, String) -> Unit = { _, _ -> },
+    onNavigateToDrillDown: (DrillTarget) -> Unit = {},
     onItemFocus: (MetaPreview) -> Unit = {},
     onPreloadAdjacentItem: (MetaPreview) -> Unit = {},
     onSaveFocusState: (Int, Int, String?, Map<String, String>, Map<String, Int>, Int, Int) -> Unit,
@@ -371,6 +372,7 @@ fun ModernHomeContent(
             when (val p = item.payload) {
                 is ModernPayload.Catalog -> "${p.itemType}:${p.itemId}"
                 is ModernPayload.CollectionFolder -> "folder:${p.folderId}"
+                is ModernPayload.Drill -> "drill:${p.target.drillCatalogId}"
                 is ModernPayload.ContinueWatching -> "cw:${p.item.hashCode()}"
             }
         }
@@ -398,6 +400,7 @@ fun ModernHomeContent(
                         (item.payload as? ModernPayload.CollectionFolder)?.focusKey == selection.focusKey
                     }
                 }
+                is ModernPayload.Drill -> true
                 is ModernPayload.ContinueWatching -> true
             }
         } ?: false
@@ -1138,6 +1141,7 @@ fun ModernHomeContent(
                 onRowItemFocusedInternal = onRowItemFocusedInternalLambda,
                 onNavigateToDetail = onNavigateToDetail,
                 onNavigateToFolderDetail = onNavigateToFolderDetail,
+                onNavigateToDrillDown = onNavigateToDrillDown,
                 onLoadMoreCatalog = onLoadMoreCatalog,
                 onContinueWatchingClick = onContinueWatchingClick,
                 onContinueWatchingOptions = onContinueWatchingOptionsLambda,
