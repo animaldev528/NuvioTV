@@ -192,6 +192,21 @@ import kotlinx.coroutines.launch
 val LocalSidebarExpanded = compositionLocalOf { false }
 val LocalContentFocusRequester = compositionLocalOf { FocusRequester.Default }
 
+/**
+ * True while the active profile is a kids profile (KIDS_PROFILE_IDS). Poster
+ * options read this to decide whether to surface the kids-only "More like this"
+ * action (Kyle/Audrey never see it).
+ */
+val LocalKidsMode = compositionLocalOf { false }
+
+/**
+ * Kids-only long-press action: navigate to the More-like-this wall for a pressed
+ * approved title. Null outside the sidebar scaffolds (e.g. onboarding), where the
+ * action must stay hidden.
+ */
+val LocalMoreLikeThisNavigator =
+    compositionLocalOf<((type: String, id: String, title: String) -> Unit)?> { null }
+
 private const val SIDEBAR_AUTO_COLLAPSE_DELAY_MS = 4_000L
 
 private const val MAX_SUPPORTED_FONT_SCALE = 1.15f
@@ -1126,6 +1141,7 @@ open class MainActivity : ComponentActivity() {
                                     sidebarCollapsed = sidebarCollapsed,
                                     modernSidebarBlurEnabled = modernSidebarBlurEnabled,
                                     hideBuiltInHeaders = hideBuiltInHeadersForFloatingPill,
+                                    kidsMode = kidsMode,
                                     activeProfileName = activeProfile?.name ?: "",
                                     activeProfileColorHex = activeProfile?.avatarColorHex ?: "#1E88E5",
                                     activeProfileAvatarImageUrl = activeProfileAvatarImageUrl,
@@ -1145,6 +1161,7 @@ open class MainActivity : ComponentActivity() {
                                     selectedDrawerRoute = selectedDrawerRoute,
                                     sidebarCollapsed = sidebarCollapsed,
                                     hideBuiltInHeaders = false,
+                                    kidsMode = kidsMode,
                                     activeProfileName = activeProfile?.name ?: "",
                                     activeProfileColorHex = activeProfile?.avatarColorHex ?: "#1E88E5",
                                     activeProfileAvatarImageUrl = activeProfileAvatarImageUrl,
@@ -1314,6 +1331,7 @@ private fun LegacySidebarScaffold(
     selectedDrawerRoute: String?,
     sidebarCollapsed: Boolean,
     hideBuiltInHeaders: Boolean,
+    kidsMode: Boolean,
     activeProfileName: String,
     activeProfileColorHex: String,
     activeProfileAvatarImageUrl: String?,
@@ -1585,7 +1603,11 @@ private fun LegacySidebarScaffold(
         ) {
             CompositionLocalProvider(
                 LocalSidebarExpanded provides (drawerState.currentValue == DrawerValue.Open),
-                LocalContentFocusRequester provides contentFocusRequester
+                LocalContentFocusRequester provides contentFocusRequester,
+                LocalKidsMode provides kidsMode,
+                LocalMoreLikeThisNavigator provides { type, id, title ->
+                    navController.navigate(Screen.MoreLikeThis.createRoute(type, id, title))
+                }
             ) {
                 NuvioNavHost(
                     navController = navController,
@@ -1709,6 +1731,7 @@ private fun ModernSidebarScaffold(
     sidebarCollapsed: Boolean,
     modernSidebarBlurEnabled: Boolean,
     hideBuiltInHeaders: Boolean,
+    kidsMode: Boolean,
     activeProfileName: String,
     activeProfileColorHex: String,
     activeProfileAvatarImageUrl: String?,
@@ -2022,7 +2045,11 @@ private fun ModernSidebarScaffold(
         ) {
             CompositionLocalProvider(
                 LocalSidebarExpanded provides isSidebarExpanded,
-                LocalContentFocusRequester provides contentFocusRequester
+                LocalContentFocusRequester provides contentFocusRequester,
+                LocalKidsMode provides kidsMode,
+                LocalMoreLikeThisNavigator provides { type, id, title ->
+                    navController.navigate(Screen.MoreLikeThis.createRoute(type, id, title))
+                }
             ) {
                 NuvioNavHost(
                     navController = navController,
