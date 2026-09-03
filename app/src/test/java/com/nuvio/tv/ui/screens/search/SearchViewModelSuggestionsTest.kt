@@ -198,6 +198,8 @@ class SearchViewModelSuggestionsTest {
             watchProgressRepository = watchProgress,
             watchedSeriesStateHolder = watchedSeries,
             posterOptions = mockk<PosterOptionsController>(relaxed = true),
+            tmdbMetadataService = mockk<com.nuvio.tv.core.tmdb.TmdbMetadataService>(relaxed = true),
+            tmdbSettingsDataStore = mockk<com.nuvio.tv.data.local.TmdbSettingsDataStore>(relaxed = true),
             activityEventReporter = mockk(relaxed = true),
             context = mockk<Context>(relaxed = true)
         )
