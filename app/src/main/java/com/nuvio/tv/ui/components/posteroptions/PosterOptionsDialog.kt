@@ -25,6 +25,7 @@ import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.nuvio.tv.LocalMoreLikeThisNavigator
 import com.nuvio.tv.R
 import com.nuvio.tv.core.tracking.TrackingMembershipRemovalImpact
 import com.nuvio.tv.core.tracking.TrackingMembershipRemovalConfirmation
@@ -48,6 +49,7 @@ fun PosterOptionsDialog(
     isWatchedPending: Boolean,
     onDismiss: () -> Unit,
     onDetails: () -> Unit,
+    onMoreLikeThis: (() -> Unit)? = null,
     onToggleLibrary: () -> Unit,
     onToggleWatched: () -> Unit
 ) {
@@ -73,6 +75,19 @@ fun PosterOptionsDialog(
             )
         ) {
             Text(stringResource(R.string.cw_action_go_to_details))
+        }
+
+        if (onMoreLikeThis != null) {
+            Button(
+                onClick = onMoreLikeThis,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.colors(
+                    containerColor = NuvioTheme.colors.BackgroundCard,
+                    contentColor = NuvioTheme.colors.TextPrimary
+                )
+            ) {
+                Text(stringResource(R.string.detail_tab_more_like_this))
+            }
         }
 
         Button(
@@ -213,6 +228,24 @@ fun PosterOptionsHost(
         val isSeries = target.apiType.equals("series", ignoreCase = true) ||
             target.apiType.equals("tv", ignoreCase = true) ||
             target.apiType.equals("anime", ignoreCase = true)
+        // "More like this": offered on every profile (kids walls AND adult AI-search
+        // rows) for movie/series tiles. The action navigates to Screen.MoreLikeThis,
+        // whose screen re-resolves the ACTIVE profile's curated row addon rather than
+        // trusting this tile's addon (cross-addon Saved tiles must still hit the
+        // profile's curated universe). Titles outside that universe get a friendly
+        // empty wall ("Not on one of our lists").
+        val navigateMoreLikeThis = LocalMoreLikeThisNavigator.current
+        val onMoreLikeThis = if (navigateMoreLikeThis != null && (isMovie || isSeries)) {
+            {
+                // Entry point from a wall/library: no parent wall to hide yet. When this
+                // long-press happens INSIDE a More-like-this wall the screen overrides
+                // LocalMoreLikeThisNavigator and injects that wall's tile ids instead.
+                navigateMoreLikeThis(if (isMovie) "movie" else "series", target.id, target.name, emptyList())
+                controller.dismiss()
+            }
+        } else {
+            null
+        }
         PosterOptionsDialog(
             title = target.name,
             isInLibrary = state.isInLibrary,
@@ -227,6 +260,7 @@ fun PosterOptionsHost(
                 onNavigateToDetail(target.id, target.apiType, state.addonBaseUrl)
                 controller.dismiss()
             },
+            onMoreLikeThis = onMoreLikeThis,
             onToggleLibrary = {
                 if (state.librarySourceMode != LibrarySourceMode.LOCAL) {
                     controller.openListPicker()

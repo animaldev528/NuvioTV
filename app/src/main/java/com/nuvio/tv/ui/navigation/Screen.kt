@@ -8,6 +8,38 @@ sealed class Screen(val route: String) {
     data object Movies : Screen("movies")
     data object Tv : Screen("tv")
     data object Anime : Screen("anime")
+    // Kids wall presentation (Leo): full approved-content poster walls instead of
+    // the genre-row Movies/TV browsers. Reached only from the kids drawer; registered
+    // in the graph unconditionally so a back-stack restore can never hit an
+    // unregistered route (see MainActivity KIDS_PROFILE_IDS).
+    data object KidsMovies : Screen("kids_movies")
+    data object KidsTv : Screen("kids_tv")
+    // Result wall behind the long-press "More like this" action (all profiles: kids
+    // walls + adult AI-search rows). itemId is the pressed title's tt id; the screen
+    // re-resolves the ACTIVE profile's curated row addon by media type, so it works
+    // for tiles pressed on any wall/library regardless of source addon.
+    data object MoreLikeThis : Screen("kids_more_like_this/{itemType}/{itemId}?title={title}&exclude={exclude}") {
+        private fun encode(value: String): String =
+            URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
+        /**
+         * [exclude] carries the tt ids of the wall the user drilled FROM, so a
+         * recursive "More like this" hides those tiles and stays fresh (3+ deep).
+         * Empty for the first entry (from a wall/library); only recursive pushes
+         * supply it. ids are [A-Za-z0-9]+ plus commas — safe unencoded, but encode
+         * anyway for uniform route building.
+         */
+        fun createRoute(
+            itemType: String,
+            itemId: String,
+            title: String? = null,
+            exclude: List<String> = emptyList()
+        ): String {
+            val encodedTitle = title?.let { encode(it) } ?: ""
+            val encodedExclude = exclude.joinToString(",") { encode(it) }
+            return "kids_more_like_this/${encode(itemType)}/${encode(itemId)}?title=$encodedTitle&exclude=$encodedExclude"
+        }
+    }
     data object Detail : Screen("detail/{itemId}/{itemType}?addonBaseUrl={addonBaseUrl}&returnFocusSeason={returnFocusSeason}&returnFocusEpisode={returnFocusEpisode}&returnToHomeOnBack={returnToHomeOnBack}&heroBackdropUrl={heroBackdropUrl}&playOnLoad={playOnLoad}&manualSelection={manualSelection}") {
         private fun encode(value: String): String =
             URLEncoder.encode(value, "UTF-8").replace("+", "%20")

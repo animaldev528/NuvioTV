@@ -26,6 +26,9 @@ import com.nuvio.tv.ui.screens.detail.MetaDetailsScreen
 import com.nuvio.tv.ui.screens.home.HomeScreen
 import com.nuvio.tv.ui.screens.addon.AddonManagerScreen
 import com.nuvio.tv.ui.screens.addon.CatalogOrderScreen
+import com.nuvio.tv.ui.screens.kids.KidWallKind
+import com.nuvio.tv.ui.screens.kids.KidWallScreen
+import com.nuvio.tv.ui.screens.kids.MoreLikeThisScreen
 import com.nuvio.tv.ui.screens.library.LibraryScreen
 import com.nuvio.tv.ui.screens.player.PlayerExitReason
 import com.nuvio.tv.ui.screens.player.PlayerScreen
@@ -1479,6 +1482,73 @@ fun NuvioNavHost(
                             target.title
                         )
                     )
+                },
+                onBackPress = { navController.popBackStack() }
+            )
+        }
+
+        // Kids wall destinations (Leo profile). Registered unconditionally so a
+        // process-death back-stack restore can never hit an unregistered route;
+        // they're only navigable from the kids drawer (see MainActivity
+        // KIDS_PROFILE_IDS / Screen.KidsMovies).
+        composable(Screen.KidsMovies.route) {
+            KidWallScreen(
+                kind = KidWallKind.MOVIES,
+                onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
+                    navController.navigate(Screen.Detail.createRoute(itemId, itemType, addonBaseUrl))
+                },
+                onBackPress = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.KidsTv.route) {
+            KidWallScreen(
+                kind = KidWallKind.TV,
+                onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
+                    navController.navigate(Screen.Detail.createRoute(itemId, itemType, addonBaseUrl))
+                },
+
+                onBackPress = { navController.popBackStack() }
+            )
+        }
+
+        // More-like-this result wall (long-press action on all profiles — kids
+        // walls + adult AI-search rows). Registered unconditionally (like the kids
+        // walls) so a process-death back-stack restore can never hit an
+        // unregistered route.
+        composable(
+            route = Screen.MoreLikeThis.route,
+            arguments = listOf(
+                navArgument("itemType") { type = NavType.StringType },
+                navArgument("itemId") { type = NavType.StringType },
+                navArgument("title") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+                navArgument("exclude") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val itemType = backStackEntry.arguments?.getString("itemType").orEmpty()
+            val itemId = backStackEntry.arguments?.getString("itemId").orEmpty()
+            val title = backStackEntry.arguments?.getString("title")
+            // Comma-joined tt ids of the wall the user drilled FROM (null/blank = none).
+            val exclude = backStackEntry.arguments?.getString("exclude")
+                ?.split(",")
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                .orEmpty()
+            MoreLikeThisScreen(
+                itemType = itemType,
+                itemId = itemId,
+                title = title,
+                exclude = exclude,
+                onNavigateToDetail = { detailId, detailType, addonBaseUrl ->
+                    navController.navigate(Screen.Detail.createRoute(detailId, detailType, addonBaseUrl))
                 },
                 onBackPress = { navController.popBackStack() }
             )
