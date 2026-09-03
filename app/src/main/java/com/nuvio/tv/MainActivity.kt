@@ -193,15 +193,9 @@ val LocalSidebarExpanded = compositionLocalOf { false }
 val LocalContentFocusRequester = compositionLocalOf { FocusRequester.Default }
 
 /**
- * True while the active profile is a kids profile (KIDS_PROFILE_IDS). Poster
- * options read this to decide whether to surface the kids-only "More like this"
- * action (Kyle/Audrey never see it).
- */
-val LocalKidsMode = compositionLocalOf { false }
-
-/**
- * Kids-only long-press action: navigate to the More-like-this wall for a pressed
- * approved title. Null outside the sidebar scaffolds (e.g. onboarding), where the
+ * Long-press "More like this": navigate to the More-like-this wall for a pressed
+ * title, on any profile that has a curated row addon (kids walls + adult
+ * AI-search rows). Null outside the sidebar scaffolds (e.g. onboarding), where the
  * action must stay hidden.
  *
  * [exclude] carries the tt ids of the wall the user is drilling FROM (empty on the
@@ -1609,7 +1603,6 @@ private fun LegacySidebarScaffold(
             CompositionLocalProvider(
                 LocalSidebarExpanded provides (drawerState.currentValue == DrawerValue.Open),
                 LocalContentFocusRequester provides contentFocusRequester,
-                LocalKidsMode provides kidsMode,
                 LocalMoreLikeThisNavigator provides { type, id, title, exclude ->
                     navController.navigate(Screen.MoreLikeThis.createRoute(type, id, title, exclude))
                 }
@@ -2051,7 +2044,6 @@ private fun ModernSidebarScaffold(
             CompositionLocalProvider(
                 LocalSidebarExpanded provides isSidebarExpanded,
                 LocalContentFocusRequester provides contentFocusRequester,
-                LocalKidsMode provides kidsMode,
                 LocalMoreLikeThisNavigator provides { type, id, title, exclude ->
                     navController.navigate(Screen.MoreLikeThis.createRoute(type, id, title, exclude))
                 }
