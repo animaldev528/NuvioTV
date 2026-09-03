@@ -25,6 +25,7 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import com.nuvio.tv.domain.model.CatalogRow
+import com.nuvio.tv.domain.model.MetaPreview
 import com.nuvio.tv.ui.components.ContentCard
 
 /**
@@ -36,6 +37,10 @@ import com.nuvio.tv.ui.components.ContentCard
  * rows-browser (`ui.screens.hub.HubBrowseScreen`) so both look identical.
  * [firstItemFocusRequester], when non-null, is attached to this row's first
  * poster so a host screen can land entry focus on content beneath its header.
+ *
+ * [onItemLongPress], when provided, is invoked with the long-pressed poster and
+ * this row's addon base URL so the host screen can open the shared poster-options
+ * menu (Details / Add-to-library / Mark-watched) — the same one Home uses.
  */
 @Composable
 internal fun CategoryRow(
@@ -44,7 +49,8 @@ internal fun CategoryRow(
     onNavigateToDetail: (String, String, String) -> Unit,
     onNavigateToDrillDown: (DrillTarget) -> Unit,
     modifier: Modifier = Modifier,
-    firstItemFocusRequester: FocusRequester? = null
+    firstItemFocusRequester: FocusRequester? = null,
+    onItemLongPress: ((MetaPreview, String) -> Unit)? = null
 ) {
     Column(modifier.padding(vertical = 10.dp)) {
         Text(
@@ -65,7 +71,10 @@ internal fun CategoryRow(
                     // first poster (the hub tab ribbon) forward a requester;
                     // the drill tile, if any, sits after the items.
                     focusRequester = if (index == 0) firstItemFocusRequester else null,
-                    onClick = { onNavigateToDetail(item.id, item.apiType, row.addonBaseUrl) }
+                    onClick = { onNavigateToDetail(item.id, item.apiType, row.addonBaseUrl) },
+                    onLongPress = onItemLongPress?.let { cb ->
+                        { cb(item, row.addonBaseUrl) }
+                    }
                 )
             }
             if (drill != null) {
