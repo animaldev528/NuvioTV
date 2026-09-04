@@ -160,6 +160,11 @@ data class SupabaseProfile(
     @SerialName("avatar_url") val avatarUrl: String? = null,
     @SerialName("profile_background_id") val profileBackgroundId: String? = null,
     @SerialName("profile_background_url") val profileBackgroundUrl: String? = null,
+    // Taste-picker flags (nuvio-server migration 00000000000011). Absent on older
+    // servers / responses -> safe defaults, so the profile pull stays backward
+    // compatible.
+    @SerialName("curated_enabled") val curatedEnabled: Boolean = false,
+    @SerialName("taste_completed") val tasteCompleted: Boolean = false,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null
 )
