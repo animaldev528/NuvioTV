@@ -56,6 +56,7 @@ import com.nuvio.tv.ui.components.NuvioDialog
 import com.nuvio.tv.ui.components.PosterCardDefaults
 import com.nuvio.tv.ui.components.PosterCardStyle
 import androidx.compose.ui.res.stringResource
+import com.nuvio.tv.LocalMoreLikeThisNavigator
 import com.nuvio.tv.R
 import com.nuvio.tv.core.tracking.LOCAL_LIBRARY_LIST_KEY
 import com.nuvio.tv.core.tracking.supportsMembershipFor
@@ -440,6 +441,18 @@ fun HomeScreen(
         val isSeries = item.apiType.equals("series", ignoreCase = true) ||
             item.apiType.equals("tv", ignoreCase = true) ||
             item.apiType.equals("anime", ignoreCase = true)
+        // Same "More like this" action the shared poster-options dialog (search/catalog)
+        // offers: navigate to Screen.MoreLikeThis, whose screen re-resolves the active
+        // profile's curated row addon. Movie/Series tiles only.
+        val navigateMoreLikeThis = LocalMoreLikeThisNavigator.current
+        val onMoreLikeThis = if (navigateMoreLikeThis != null && (isMovie || isSeries)) {
+            {
+                navigateMoreLikeThis(if (isMovie) "movie" else "series", item.id, item.name, emptyList())
+                posterOptionsTarget = null
+            }
+        } else {
+            null
+        }
         HomePosterOptionsDialog(
             title = item.name,
             isInLibrary = uiState.posterLibraryMembership[statusKey] == true,
@@ -454,6 +467,7 @@ fun HomeScreen(
                 onNavigateToDetail(item.id, item.apiType, selectedPoster.addonBaseUrl)
                 posterOptionsTarget = null
             },
+            onMoreLikeThis = onMoreLikeThis,
             onToggleLibrary = {
                 if (uiState.librarySourceMode != LibrarySourceMode.LOCAL) {
                     viewModel.openPosterListPicker(item, selectedPoster.addonBaseUrl)
@@ -712,6 +726,7 @@ private fun HomePosterOptionsDialog(
     isWatchedPending: Boolean,
     onDismiss: () -> Unit,
     onDetails: () -> Unit,
+    onMoreLikeThis: (() -> Unit)? = null,
     onToggleLibrary: () -> Unit,
     onToggleWatched: () -> Unit
 ) {
@@ -737,6 +752,19 @@ private fun HomePosterOptionsDialog(
             )
         ) {
             Text(stringResource(R.string.cw_action_go_to_details))
+        }
+
+        if (onMoreLikeThis != null) {
+            Button(
+                onClick = onMoreLikeThis,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.colors(
+                    containerColor = NuvioTheme.colors.BackgroundCard,
+                    contentColor = NuvioTheme.colors.TextPrimary
+                )
+            ) {
+                Text(stringResource(R.string.detail_tab_more_like_this))
+            }
         }
 
         Button(
