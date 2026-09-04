@@ -60,7 +60,7 @@ data class DisplayCapabilitiesDto(
     val maxRefreshHz: Int = 0,
     /** Highest refresh across every mode the sink advertises (Display.supportedModes, straight from the TV's EDID). Distinct from [maxRefreshHz]: a 120 Hz panel sitting at 60 Hz reads 60 vs 120 here. 0 when unknown. */
     val maxSupportedRefreshHz: Int = 0,
-    /** True when the platform reports a wide-colour-gamut path to the sink (Display.isWideColorGamutSupported). Null below API 26 or when unknown. */
+    /** True when the platform reports a wide-colour-gamut path to the sink (Display.isWideColorGamut, the public API 26+ capability check). Null below API 26 or when unknown. */
     val wideColorGamut: Boolean? = null,
     /** Tokens in fixed order: "dv", "hdr10", "hdr10plus", "hlg". */
     val sinkHdrTypes: List<String> = emptyList(),

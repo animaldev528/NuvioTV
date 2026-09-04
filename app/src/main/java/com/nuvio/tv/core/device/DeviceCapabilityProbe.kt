@@ -141,7 +141,7 @@ object DeviceCapabilityProbe {
                 best.roundToInt()
             }.getOrElse { mode.refreshRate.roundToInt() }
             val wideColorGamut =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) display.isWideColorGamutSupported else null
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) display.isWideColorGamut else null
             val hdrTypes: IntArray? = display.hdrCapabilities?.supportedHdrTypes
             val names = hdrTypes
                 ?.toList()
