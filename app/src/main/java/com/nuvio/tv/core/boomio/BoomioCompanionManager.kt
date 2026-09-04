@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
 import com.nuvio.tv.BuildConfig
@@ -31,12 +32,14 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
-import java.net.DatagramSocket
-import java.net.InetAddress
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.pow
+
+private const val TAG = "BoomioCompanionManager"
 
 /**
  * The TV's companion receiver for the bsc companion hub.
@@ -51,7 +54,12 @@ import kotlin.math.pow
  * / `party_seek`; inbound `play` / `stealth_playpause` / `party_set_playing`
  * / `party_seek` / `party_ended` / `stop` / `companion_paired` / `companion_unpaired`
  * / `scrub_start` / `scrub_update` / `scrub_commit` / `stealth_volume` {percent}
- * / `stealth_keyevent` {keyCode}.
+ * / `stealth_keyevent` {keyCode} / `audio_fork_start` {phoneIp, port} / `audio_fork_stop`.
+ *
+ * `audio_fork_*` are the phone-remote private-listening surface: the TV tees the audio it is
+ * already decoding to the phone over direct LAN UDP. The phone supplies `phoneIp`/`port` — the hub
+ * relays them, it never derives them (R3). Explicit stop and the hub's heartbeat-driven stop
+ * (`audio_fork_stop { reason: "phone_timeout" }`) both arrive as `audio_fork_stop`.
  */
 @Singleton
 class BoomioCompanionManager @Inject constructor(
@@ -285,11 +293,82 @@ class BoomioCompanionManager @Inject constructor(
             "stop" -> bridge.activePlayer.value?.stop()
             "companion_paired" -> showToast("Phone connected")
             "companion_unpaired" -> showToast("Phone disconnected")
-            // audio_fork_* remain the phone remote (N2) surface; scrub_*,
-            // stealth_volume, stealth_keyevent, stealth_search and keyboard_*
-            // are handled above.
+            // Roku-style private listening (phone remote, N2): tee this TV's decoded audio to the
+            // phone over direct LAN UDP. phoneIp/port are phone-supplied — the hub relays them, it
+            // never derives them (R3). Explicit stop and the hub's heartbeat-driven
+            // audio_fork_stop { reason: "phone_timeout" } both land here.
+            "audio_fork_start" -> handleAudioForkStart(msg)
+            "audio_fork_stop" -> {
+                val player = bridge.activePlayer.value
+                val wasActive = player?.isPhoneAudioForkActive == true
+                player?.stopPhoneAudioFork()
+                if (msg.optString("reason") == "phone_timeout") {
+                    // The hub just declared this phone dead — don't ack into the relay path it closed.
+                    Log.i(TAG, "Private listening ended: phone heartbeat timed out")
+                } else if (wasActive) {
+                    // Ack only when the stop actually changed state (review F2) — an explicit stop
+                    // with nothing forked stays silent rather than claiming a state change.
+                    sendAudioForkStatus(status = "stopped")
+                }
+            }
             else -> Unit
         }
+    }
+
+    /**
+     * Arm private listening to the phone that requested it. The phone must supply its actual LAN
+     * IP + the UDP port it is listening on (R3); with no active player, or an address the player
+     * cannot fork to (mpv engine, no Exo sink), the request fails with a reason the phone can show.
+     */
+    private fun handleAudioForkStart(msg: JSONObject) {
+        val player = bridge.activePlayer.value
+        if (player == null) {
+            sendAudioForkStatus(status = "error", reason = "no_active_player")
+            return
+        }
+        val phoneIp = msg.optString("phoneIp")
+        val port = msg.optInt("port", -1)
+        // Pre-flight before arming (Q6 / review F1): the phone must be a literal IPv4 on the TV's
+        // own subnet. Rejecting here avoids acking "started" to a phone on guest Wi-Fi or another
+        // VLAN (which would then deliver silence), and avoids the async dead-worker case where a
+        // malformed address acks "started" and only then dies inside the sender's runWorker.
+        if (port !in 1..65535 || parseIpv4(phoneIp) == null) {
+            sendAudioForkStatus(status = "error", reason = "bad_phone_address")
+            return
+        }
+        if (!isPhoneOnTvSubnet(phoneIp)) {
+            sendAudioForkStatus(status = "error", reason = "different_network")
+            return
+        }
+        // A fresh arm supersedes any fork still running from a previous phone (the phone can crash
+        // before audio_fork_stop reaches us; the hub heartbeat may not have reaped it yet, and the
+        // stale fork is streaming into a dead socket). Stop-then-start makes a re-arm deterministic
+        // instead of failing fork_unavailable against the stale fork (E2E: phone crash → re-arm said
+        // "couldn't start private listening" until a fresh file rebuilt the player).
+        if (player.isPhoneAudioForkActive) {
+            Log.i(TAG, "Private listening re-arm — stopping prior fork")
+            player.stopPhoneAudioFork()
+        }
+        if (player.startPhoneAudioFork(phoneIp, port)) {
+            Log.i(TAG, "Private listening started -> $phoneIp:$port")
+            sendAudioForkStatus(status = "started")
+        } else {
+            // Engine not Exo, or the audio sink is not fork-capable for this playback.
+            sendAudioForkStatus(status = "error", reason = "fork_unavailable")
+        }
+    }
+
+    /**
+     * Ack an audio_fork command back to the phone. `bsc/services/device-relay.js` forwards any
+     * `audio_fork`-typed frame from a TV to its paired phone, so acking with the same type gives
+     * the phone's private-listening UI a reliable started/stopped/error signal.
+     */
+    private fun sendAudioForkStatus(status: String, reason: String? = null) {
+        webSocket?.send(JSONObject().apply {
+            put("type", "audio_fork")
+            put("status", status)
+            reason?.let { put("reason", it) }
+        }.toString())
     }
 
     private fun audioManager(): AudioManager? =
@@ -435,13 +514,87 @@ class BoomioCompanionManager @Inject constructor(
         }
     }
 
-    /** Best-effort LAN address, used by the hub for party member IP discovery. */
-    private fun bestEffortLanIp(): String? = try {
-        DatagramSocket().use { socket ->
-            socket.connect(InetAddress.getByName("8.8.8.8"), 10_002)
-            socket.localAddress?.hostAddress
+    /**
+     * Best-effort LAN IPv4, used by the hub for party member IP discovery (register) and by the
+     * private-listening pre-flight [isPhoneOnTvSubnet] to compare the phone's subnet against the
+     * TV's own. Resolved from the up network interfaces — NOT the old connect-to-8.8.8.8
+     * default-route trick: that did real socket I/O, which threw NetworkOnMainThreadException when
+     * the pre-flight ran from the main-thread message handler (audio_fork_start lands here via
+     * runOnMain in [listener]) and was swallowed into null, failing a same-LAN fork as
+     * "different_network". Pure local lookup — safe on any thread, no route/DNS dependency.
+     * Prefers Wi-Fi/Ethernet site-local IPv4; skips loopback, virtual, tun/ppp/rmnet.
+     */
+    private fun bestEffortLanIp(): String? {
+        var best: String? = null
+        var bestScore = Int.MAX_VALUE
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+            for (net in interfaces) {
+                if (!net.isUp || net.isLoopback || net.isVirtual) continue
+                val lower = net.name.lowercase()
+                if ("tun" in lower || "ppp" in lower || "rmnet" in lower) continue
+                val score = when {
+                    lower.startsWith("wlan") -> 0
+                    lower.startsWith("eth") || lower.startsWith("en") -> 1
+                    else -> 2
+                }
+                for (addr in net.inetAddresses) {
+                    if (addr !is Inet4Address) continue
+                    val ip = addr.hostAddress ?: continue
+                    if (!isPrivateLanIp(ip)) continue
+                    if (score < bestScore || (score == bestScore && best == null)) {
+                        bestScore = score
+                        best = ip
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            return null
         }
-    } catch (_: Exception) {
-        null
+        return best
+    }
+
+    /** True for the RFC1918 site-local ranges the companion fleet's LAN lives on. */
+    private fun isPrivateLanIp(ip: String): Boolean {
+        val parts = ip.split(".")
+        if (parts.size != 4) return false
+        val first = parts[0].toIntOrNull() ?: return false
+        if (first == 10) return true
+        if (first == 192 && parts[1] == "168") return true
+        if (first == 172) {
+            val second = parts[1].toIntOrNull() ?: return false
+            return second in 16..31
+        }
+        return false
+    }
+
+    /**
+     * Parse a dotted-quad IPv4 literal, or null. Private listening requires the phone to send its
+     * actual LAN IP as a literal — the fork is a unicast UDP stream and a hostname has no place in
+     * that contract (it would also ack "started" and only then fail async in the sender).
+     */
+    private fun parseIpv4(ip: String): IntArray? {
+        val parts = ip.split(".")
+        if (parts.size != 4) return null
+        val out = IntArray(4)
+        for (i in 0 until 4) {
+            val v = parts[i].toIntOrNull() ?: return null
+            if (v !in 0..255) return null
+            out[i] = v
+        }
+        return out
+    }
+
+    /**
+     * True when [phoneIp] is a literal IPv4 on the same /24 subnet as the TV's own LAN address.
+     * The companion fleet sits on flat /24 LANs (the hub itself is 192.168.68.x). A phone on guest
+     * Wi-Fi or another VLAN would otherwise ack "started" and stream into the void (Q6 — same-subnet
+     * requirement). Fails closed (rejects) when the TV cannot determine its own address or the phone
+     * IP is not IPv4.
+     */
+    private fun isPhoneOnTvSubnet(phoneIp: String): Boolean {
+        val phone = parseIpv4(phoneIp) ?: return false
+        val tv = parseIpv4(bestEffortLanIp() ?: return false) ?: return false
+        return phone[0] == tv[0] && phone[1] == tv[1] && phone[2] == tv[2]
     }
 }
