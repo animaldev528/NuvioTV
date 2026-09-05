@@ -23,7 +23,10 @@ import java.util.concurrent.TimeUnit
  *   bytes 0..3  sample rate in Hz, big-endian int32   — phone (re)inits its AudioTrack from this,
  *   bytes 4..5  sequence number, big-endian uint16    — increments per datagram; lets the phone
  *                                                       detect loss and gap bytes,
- *   bytes 6..   PCM16 signed little-endian, stereo interleaved.
+ *   byte   6    channel count (1..8)                  — TEMP diagnostic: 2 = stereo (folded or
+ *                                                       native 2ch), 6/8 = raw multichannel
+ *                                                       passthrough (no downmix, no fold),
+ *   bytes 7..   PCM16 signed little-endian interleaved, [byte 6] channels.
  *
  * No separate format header is needed: every datagram is self-describing, so a phone that starts
  * listening mid-stream syncs on its very first datagram, and a mid-stream sample-rate change is
@@ -53,8 +56,16 @@ internal class PrivateListeningAudioSender(
 
         /** Keep datagrams under the typical 1500-byte Ethernet MTU (UDP/IP headers ~28B). */
         private const val MAX_DATAGRAM = 1200
-        private const val PREAMBLE_BYTES = 6
+        // TEMP 5.1-buzz diagnostic: preamble carries a per-datagram channel count so the phone can
+        // render raw multichannel and let Android's mixer do the stereo fold (vs our own fold).
+        private const val PREAMBLE_BYTES = 7
         private const val MAX_CHUNK = MAX_DATAGRAM - PREAMBLE_BYTES
+
+        // TEMP 5.1-buzz diagnostic: when the decoder hands us >= 6ch PCM, send it to the phone
+        // UNTOUCHED (no downmix/fold/limiter) and advertise the channel count, so the phone opens a
+        // 5.1/7.1 AudioTrack and Android's own downmixer renders to the earbuds. Flipping to false
+        // restores the folded-stereo path. This isolates whether OUR fold is the buzz source.
+        private const val PL_PASSTHROUGH_MULTICHANNEL = true
 
         /** Bounded so a stalled phone can never back-pressure the audio thread or grow memory. */
         private const val QUEUE_CAPACITY = 128
@@ -170,16 +181,28 @@ internal class PrivateListeningAudioSender(
                 }
                 if (!running || frame == null) continue
                 try {
-                    val pcm16Stereo = renderStereoPcm16(frame)
-                    if (pcm16Stereo == null) {
+                    // TEMP 5.1-buzz diagnostic: >= 6ch frames go out as raw multichannel (no fold,
+                    // no limiter) when PL_PASSTHROUGH_MULTICHANNEL is on; otherwise the folded path.
+                    val passthrough = PL_PASSTHROUGH_MULTICHANNEL && frame.channelCount >= 6
+                    val channels = if (passthrough) frame.channelCount else 2
+                    val pcm16 = if (passthrough) {
+                        renderPassthroughPcm16(frame)
+                    } else {
+                        renderStereoPcm16(frame)
+                    }
+                    if (pcm16 == null) {
                         droppedFrames++
                         continue
                     }
-                    // TEMP debug: record the exact downmix sent to the phone (ch=2 records in cap.pcm).
-                    PlPcmCapture.offer(ByteBuffer.wrap(pcm16Stereo), 2, frame.sampleRate, false)
+                    // TEMP debug: record exactly what is sent to the phone (ch = wire channel count).
+                    PlPcmCapture.offer(ByteBuffer.wrap(pcm16), channels, frame.sampleRate, false)
+                    // Chunk on whole frames so the phone's AudioTrack write never splits a sample
+                    // (a misaligned tail would be silently dropped by write's frame rounding).
+                    val frameBytes = 2 * channels
+                    val chunkMax = (MAX_CHUNK / frameBytes) * frameBytes
                     var offset = 0
-                    while (offset < pcm16Stereo.size) {
-                        val chunk = minOf(MAX_CHUNK, pcm16Stereo.size - offset)
+                    while (offset < pcm16.size) {
+                        val chunk = minOf(chunkMax, pcm16.size - offset)
                         // Rebuild the preamble each datagram: rate is constant per frame, seq advances.
                         val datagram = ByteArray(PREAMBLE_BYTES + chunk)
                         datagram[0] = (frame.sampleRate ushr 24).toByte()
@@ -188,7 +211,8 @@ internal class PrivateListeningAudioSender(
                         datagram[3] = frame.sampleRate.toByte()
                         datagram[4] = (seq ushr 8).toByte()
                         datagram[5] = seq.toByte()
-                        System.arraycopy(pcm16Stereo, offset, datagram, PREAMBLE_BYTES, chunk)
+                        datagram[6] = channels.toByte()
+                        System.arraycopy(pcm16, offset, datagram, PREAMBLE_BYTES, chunk)
                         offset += chunk
                         seq = (seq + 1) and 0xFFFF
                         socket.send(DatagramPacket(datagram, datagram.size, address, phonePort))
@@ -296,6 +320,33 @@ internal class PrivateListeningAudioSender(
             writeS16Le(out, o, clampToS16(left[k] * limiterGain))
             writeS16Le(out, o + 2, clampToS16(right[k] * limiterGain))
             o += 4
+        }
+        return out
+    }
+
+    /**
+     * TEMP 5.1-buzz diagnostic: pass a >= 6ch decoded buffer through to the phone with NO downmix,
+     * fold, or limiting. int16 input is returned untouched (same reference); float input is
+     * converted to PCM16 LE with the same per-sample clamp as the stereo path (a legal float never
+     * exceeds +-1.0, so in practice the clamp is a no-op). Returns null for an empty/mis-sized
+     * buffer. NOT for merge.
+     */
+    private fun renderPassthroughPcm16(frame: PcmFrame): ByteArray? {
+        val n = frame.channelCount
+        if (n <= 0) return null
+        if (!frame.isFloat) {
+            val whole = frame.bytes.size / (2 * n) * (2 * n)
+            if (whole <= 0) return null
+            return if (whole == frame.bytes.size) frame.bytes else frame.bytes.copyOf(whole)
+        }
+        val sampleCount = frame.bytes.size / (4 * n)
+        if (sampleCount <= 0) return null
+        val input = ByteBuffer.wrap(frame.bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val out = ByteArray(sampleCount * 2 * n)
+        var o = 0
+        for (i in 0 until sampleCount * n) {
+            writeS16Le(out, o, clampToS16(input.getFloat(i * 4)))
+            o += 2
         }
         return out
     }
