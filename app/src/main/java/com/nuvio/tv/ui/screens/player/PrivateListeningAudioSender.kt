@@ -65,6 +65,15 @@ internal class PrivateListeningAudioSender(
         private const val CENTER_GAIN = 0.7071f   // 1 / sqrt(2)
         private const val BACK_GAIN = 0.7071f
         private const val SIDE_GAIN = 0.5f
+
+        /**
+         * Ceiling a downmixed frame is limited to. Kept just under 0 dBFS so the phone's output
+         * stage gets a little inter-sample headroom after the TV has already done its work.
+         */
+        private const val LIMIT_CEIL = 0.98f
+
+        /** One-pole release toward unity after a limited frame (~ tens of ms at audio cadence). */
+        private const val LIMITER_RELEASE = 0.15f
     }
 
     @Volatile
@@ -83,6 +92,12 @@ internal class PrivateListeningAudioSender(
     @Volatile
     var sendErrors: Long = 0
         private set
+
+    /**
+     * Smoothed gain of the per-frame peak limiter; 1.0 when nothing needs limiting. Worker-thread
+     * only ([renderStereoPcm16] runs solely in [runWorker]), so no synchronization is needed.
+     */
+    private var limiterGain = 1f
 
     private var worker: Thread? = null
 
@@ -214,7 +229,9 @@ internal class PrivateListeningAudioSender(
             else -> false
         }
 
-        var o = 0
+        val left = FloatArray(sampleCount)
+        val right = FloatArray(sampleCount)
+        var peak = 0f
         for (k in 0 until sampleCount) {
             val (l, r) = when {
                 n == 1 -> {
@@ -247,8 +264,36 @@ internal class PrivateListeningAudioSender(
                         (fr + CENTER_GAIN * fc + BACK_GAIN * br + SIDE_GAIN * sr)
                 }
             }
-            writeS16Le(out, o, clampToS16(l))
-            writeS16Le(out, o + 2, clampToS16(r))
+            left[k] = l
+            right[k] = r
+            val absL = if (l > 0f) l else -l
+            val absR = if (r > 0f) r else -r
+            if (absL > peak) peak = absL
+            if (absR > peak) peak = absR
+        }
+
+        // Folding centre/back/side into the front pair can push correlated peaks in loud surround
+        // content past full scale (worst case ~2.4x), and the old per-sample clamp brick-walled
+        // those into the hard clip the phone hears as crackle. Limit the whole frame instead: scale
+        // it down just enough to fit [LIMIT_CEIL] the moment it would clip (instant cut, one-pole
+        // release) so the limiter stays inaudible until the mix genuinely needs headroom, and the
+        // dialogue-preserving coefficients are untouched. Mono/stereo pass-through can never exceed
+        // full scale, so it is left byte-for-byte as before and [limiterGain] is held out of it.
+        if (useCenterDownmix) {
+            val targetGain = if (peak > LIMIT_CEIL) LIMIT_CEIL / peak else 1f
+            if (targetGain < limiterGain) {
+                limiterGain = targetGain
+            } else {
+                limiterGain += (targetGain - limiterGain) * LIMITER_RELEASE
+            }
+        } else {
+            limiterGain = 1f
+        }
+
+        var o = 0
+        for (k in 0 until sampleCount) {
+            writeS16Le(out, o, clampToS16(left[k] * limiterGain))
+            writeS16Le(out, o + 2, clampToS16(right[k] * limiterGain))
             o += 4
         }
         return out
