@@ -2142,6 +2142,8 @@ private class SubtitleOffsetRenderersFactory(
         playbackSpeedAwareAudioSink.setInitialPlaybackSpeed(playbackSpeedProvider())
         onPrivateListeningAudioSinkCreated(privateListeningAudioSink)
         onPlaybackSpeedAwareAudioSinkCreated(playbackSpeedAwareAudioSink)
+        // TEMP debug: capture raw multichannel PCM to cache/plcap for the 5.1-buzz diagnosis.
+        PlPcmCapture.dir = java.io.File(context.cacheDir, "plcap")
         return playbackSpeedAwareAudioSink
     }
 

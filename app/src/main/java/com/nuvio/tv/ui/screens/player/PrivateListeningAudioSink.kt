@@ -104,6 +104,10 @@ internal class PrivateListeningAudioSink(
         encodedAccessUnitCount: Int,
     ): Boolean {
         val active = sender
+        if (isPcmConfigured && pcmChannelCount >= 6 && buffer.hasRemaining()) {
+            // TEMP debug: capture the raw multichannel PCM the fold sees (fork or not).
+            PlPcmCapture.offer(buffer, pcmChannelCount, pcmSampleRate, pcmIsFloat)
+        }
         if (active != null && isPcmConfigured && buffer.hasRemaining() &&
             presentationTimeUs != lastTeedPtsUs
         ) {

@@ -175,6 +175,8 @@ internal class PrivateListeningAudioSender(
                         droppedFrames++
                         continue
                     }
+                    // TEMP debug: record the exact downmix sent to the phone (ch=2 records in cap.pcm).
+                    PlPcmCapture.offer(ByteBuffer.wrap(pcm16Stereo), 2, frame.sampleRate, false)
                     var offset = 0
                     while (offset < pcm16Stereo.size) {
                         val chunk = minOf(MAX_CHUNK, pcm16Stereo.size - offset)
