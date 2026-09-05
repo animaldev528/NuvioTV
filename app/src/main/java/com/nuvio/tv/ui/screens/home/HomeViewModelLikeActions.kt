@@ -131,8 +131,10 @@ fun HomeViewModel.togglePosterLike(item: MetaPreview) {
 
 /** "Done for now": pushes the profile's full current like set through
  *  [com.nuvio.tv.core.sync.TastePickSyncService.pushTastePicks], which flips
- *  taste_completed server-side and locally. With 0 likes the starter home simply
- *  stays and the hint returns later. */
+ *  taste_completed server-side and locally. With 0 likes the push is skipped so
+ *  onboarding is never burned on an empty set — the starter home stays and the
+ *  hint returns later. On success a manual catalog refresh is emitted so the
+ *  taste rows recompute in place instead of waiting out the home-refresh TTL. */
 fun HomeViewModel.completeTasteOnboarding() {
     val profile = profileManager.activeProfile ?: return
     if (!profile.needsTasteHint || _uiState.value.tasteHintBusy) return
@@ -141,15 +143,27 @@ fun HomeViewModel.completeTasteOnboarding() {
     viewModelScope.launch {
         try {
             val picks = buildLikedPicks(profileId)
-            tastePickSyncService.pushTastePicks(profileId, picks).onFailure { error ->
-                Log.w(HomeViewModel.TAG, "Failed to push taste picks on Done: ${error.message}")
+            if (picks.isEmpty()) {
+                Log.i(HomeViewModel.TAG, "Done for now with 0 likes — skipping push; hint stays for this profile")
+                return@launch
             }
+            tastePickSyncService.pushTastePicks(profileId, picks)
+                .onSuccess {
+                    Log.i(HomeViewModel.TAG, "Taste picks pushed (${picks.size}); refreshing home catalogs")
+                    // The curated rows recompute server-side from these picks; emitting a
+                    // manual refresh makes Home re-request them now (bypasses the TTL).
+                    startupSyncService.requestCatalogRefresh()
+                }
+                .onFailure { error ->
+                    Log.w(HomeViewModel.TAG, "Failed to push taste picks on Done: ${error.message}")
+                }
             // markProfileTasteCompleted happens inside pushTastePicks on server success;
             // on failure we intentionally stay on the hint so it returns later.
         } catch (error: Exception) {
             Log.w(HomeViewModel.TAG, "Failed to complete taste onboarding: ${error.message}")
+        } finally {
+            _uiState.update { it.copy(tasteHintBusy = false) }
         }
-        _uiState.update { it.copy(tasteHintBusy = false) }
     }
 }
 
