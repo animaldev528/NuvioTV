@@ -67,8 +67,8 @@ internal class PrivateListeningAudioSender(
         private const val SIDE_GAIN = 0.5f
 
         /**
-         * Ceiling a downmixed frame is limited to. Kept just under 0 dBFS so the phone's output
-         * stage gets a little inter-sample headroom after the TV has already done its work.
+         * Ceiling applied to a frame whose true peak is over full scale. Kept just under 0 dBFS so
+         * the phone's output stage gets a little inter-sample headroom after the TV has limited.
          */
         private const val LIMIT_CEIL = 0.98f
 
@@ -272,22 +272,21 @@ internal class PrivateListeningAudioSender(
             if (absR > peak) peak = absR
         }
 
-        // Folding centre/back/side into the front pair can push correlated peaks in loud surround
-        // content past full scale (worst case ~2.4x), and the old per-sample clamp brick-walled
-        // those into the hard clip the phone hears as crackle. Limit the whole frame instead: scale
-        // it down just enough to fit [LIMIT_CEIL] the moment it would clip (instant cut, one-pole
-        // release) so the limiter stays inaudible until the mix genuinely needs headroom, and the
-        // dialogue-preserving coefficients are untouched. Mono/stereo pass-through can never exceed
-        // full scale, so it is left byte-for-byte as before and [limiterGain] is held out of it.
-        if (useCenterDownmix) {
-            val targetGain = if (peak > LIMIT_CEIL) LIMIT_CEIL / peak else 1f
-            if (targetGain < limiterGain) {
-                limiterGain = targetGain
-            } else {
-                limiterGain += (targetGain - limiterGain) * LIMITER_RELEASE
-            }
+        // A clip here is baked into the phone-only fork stream — the TV's own speakers play the
+        // untouched decode, which is why the TV never shows it. Two sources can push a frame past
+        // full scale: (1) the 5.1/7.1 fold sums centre/back/side into the front pair (worst case
+        // ~2.4x), and (2) float PCM — decoders hand float buffers (Atmos/E-AC3 folds, hot masters)
+        // whose samples can exceed +-1.0 in ANY layout, including plain stereo. The old per-sample
+        // clamp brick-walled both into crackle. Limit the whole frame instead, but only when its
+        // true peak is actually over full scale: scale it down just enough to fit [LIMIT_CEIL]
+        // (instant cut, one-pole release). In-range frames (peak <= 1.0 — every int16 buffer and
+        // legal float) pass through at exactly unity gain, so normal content stays bit-identical
+        // and the limiter is silent until the stream genuinely needs it.
+        val targetGain = if (peak > 1.0f) LIMIT_CEIL / peak else 1f
+        if (targetGain < limiterGain) {
+            limiterGain = targetGain
         } else {
-            limiterGain = 1f
+            limiterGain += (targetGain - limiterGain) * LIMITER_RELEASE
         }
 
         var o = 0
